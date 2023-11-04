@@ -3,7 +3,7 @@ use ddsfile::{
 };
 use thiserror::Error;
 
-use crate::{BntxFile, SurfaceFormat};
+use crate::{Bntx, SurfaceFormat};
 
 #[derive(Debug, Error)]
 pub enum CreateBntxError {
@@ -13,24 +13,25 @@ pub enum CreateBntxError {
     UnsupportedImageFormat,
 }
 
-pub fn create_dds(bntx: &BntxFile) -> Result<Dds, tegra_swizzle::SwizzleError> {
+// TODO: use image_dds
+pub fn create_dds(bntx: &Bntx) -> Result<Dds, tegra_swizzle::SwizzleError> {
     let some_if_above_one = |x| if x > 0 { Some(x) } else { None };
 
     let mut dds = Dds::new_dxgi(NewDxgiParams {
-        height: bntx.nx_header.brti.height,
-        width: bntx.nx_header.brti.width,
-        depth: some_if_above_one(bntx.nx_header.brti.depth),
-        format: bntx.nx_header.brti.format.into(),
-        mipmap_levels: some_if_above_one(bntx.nx_header.brti.mipmap_count as u32),
-        array_layers: some_if_above_one(bntx.nx_header.brti.layer_count),
-        caps2: if bntx.nx_header.brti.depth > 1 {
+        height: bntx.height(),
+        width: bntx.width(),
+        depth: some_if_above_one(bntx.depth()),
+        format: bntx.image_format().into(),
+        mipmap_levels: some_if_above_one(bntx.mipmap_count() as u32),
+        array_layers: some_if_above_one(bntx.layer_count()),
+        caps2: if bntx.depth() > 1 {
             Some(Caps2::VOLUME)
         } else {
             None
         },
-        is_cubemap: bntx.nx_header.brti.layer_count == 6,
+        is_cubemap: bntx.layer_count() == 6,
         // TODO: Check the dimension instead?
-        resource_dimension: if bntx.nx_header.brti.depth > 1 {
+        resource_dimension: if bntx.depth() > 1 {
             D3D10ResourceDimension::Texture3D
         } else {
             D3D10ResourceDimension::Texture2D
@@ -46,19 +47,19 @@ pub fn create_dds(bntx: &BntxFile) -> Result<Dds, tegra_swizzle::SwizzleError> {
 }
 
 // TODO: Make this a method?
-pub fn create_bntx(name: &str, dds: &Dds) -> Result<BntxFile, CreateBntxError> {
-    BntxFile::from_image_data(
-        name,
-        dds.get_width(),
-        dds.get_height(),
-        dds.get_depth(),
-        dds.get_num_mipmap_levels(),
-        layer_count(dds),
-        dds_image_format(dds).ok_or(CreateBntxError::UnsupportedImageFormat)?,
-        &dds.data,
-    )
-    .map_err(Into::into)
-}
+// pub fn create_bntx(name: &str, dds: &Dds) -> Result<BntxFile, CreateBntxError> {
+//     BntxFile::from_image_data(
+//         name,
+//         dds.get_width(),
+//         dds.get_height(),
+//         dds.get_depth(),
+//         dds.get_num_mipmap_levels(),
+//         layer_count(dds),
+//         dds_image_format(dds).ok_or(CreateBntxError::UnsupportedImageFormat)?,
+//         &dds.data,
+//     )
+//     .map_err(Into::into)
+// }
 
 fn layer_count(dds: &Dds) -> u32 {
     // Array layers for DDS are calculated differently for cube maps.
