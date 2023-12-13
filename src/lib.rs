@@ -4,7 +4,6 @@ use binrw::{
 use std::convert::TryFrom;
 use std::io::{Seek, Write};
 use std::path::Path;
-use std::{fmt, io};
 use tegra_swizzle::surface::{deswizzle_surface, BlockDim};
 use tegra_swizzle::BlockHeight;
 use xc3_write::{write_full, xc3_write_binwrite_impl, Xc3Write, Xc3WriteOffsets};
@@ -35,29 +34,12 @@ pub struct Bntx {
 }
 
 // Use byte literals to ignore reader endianness.
-#[derive(Debug, BinRead, PartialEq, Clone, Copy)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone, Copy)]
 pub enum ByteOrder {
-    #[br(magic = b"\xFF\xFE")]
+    #[brw(magic = b"\xFF\xFE")]
     LittleEndian,
-    #[br(magic = b"\xFE\xFF")]
+    #[brw(magic = b"\xFE\xFF")]
     BigEndian,
-}
-
-impl BinWrite for ByteOrder {
-    type Args<'a> = ();
-
-    fn write_options<W: io::Write + Seek>(
-        &self,
-        writer: &mut W,
-        _endian: binrw::Endian,
-        _args: Self::Args<'_>,
-    ) -> BinResult<()> {
-        match self {
-            ByteOrder::LittleEndian => writer.write_all(b"\xFF\xFE")?,
-            ByteOrder::BigEndian => writer.write_all(b"\xFE\xFF")?,
-        }
-        Ok(())
-    }
 }
 
 #[binread]
@@ -134,7 +116,6 @@ pub struct StrSection {
     pub block_size: u32,
     pub block_offset: u64,
 
-    // #[br(temp)]
     #[bw(calc = strings.len() as u32)]
     pub str_count: u32,
 
@@ -317,21 +298,16 @@ pub enum TextureViewDimension {
 
 #[binrw]
 #[brw(magic = b"BRTD")]
+#[derive(Debug)]
 pub struct Brtd {
-    /// Size of the image data + BRTD header.
+    // Size of the image data + BRTD header.
     #[brw(pad_before = 4)]
     #[br(temp)]
     #[bw(calc = image_data.len() as u64 + 16)]
-    pub brtd_size: u64,
+    brtd_size: u64,
 
     #[br(count = brtd_size - 16)]
     pub image_data: Vec<u8>,
-}
-
-impl fmt::Debug for Brtd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ImageData[{:?}]", self.image_data.len())
-    }
 }
 
 #[derive(Debug, BinRead, BinWrite)]
@@ -401,9 +377,13 @@ impl Bntx {
         reader.read_le()
     }
 
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> Result<(), binrw::error::Error> {
+        write_full(self, writer, 0, &mut 0)
+    }
+
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), binrw::error::Error> {
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
-        write_full(self, &mut writer, 0, &mut 0)
+        self.write(&mut writer)
     }
 }
 
