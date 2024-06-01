@@ -1,12 +1,11 @@
 use binrw::{
-    binread, binrw, BinRead, BinReaderExt, BinResult, BinWrite, FilePtr16, FilePtr32, FilePtr64,
+    args, binread, binrw, BinRead, BinReaderExt, BinWrite, FilePtr16, FilePtr32, FilePtr64,
 };
 use std::convert::TryFrom;
 use std::io::{Seek, Write};
 use std::path::Path;
-use tegra_swizzle::surface::{deswizzle_surface, BlockDim};
-use tegra_swizzle::BlockHeight;
-use xc3_write::{write_full, xc3_write_binwrite_impl, Xc3Write, Xc3WriteOffsets};
+use tegra_swizzle::surface::BlockDim;
+use xc3_write::{Xc3Write, Xc3WriteOffsets};
 
 // TODO: Add module level docs for basic usage.
 // TODO: Make this optional.
@@ -136,15 +135,10 @@ pub struct BntxStr {
     #[bw(calc = chars.len() as u16)]
     len: u16,
 
-    #[br(align_after = 4, count = len, map = |x: Vec<u8>| String::from_utf8_lossy(&x).into_owned())]
-    #[bw(align_after = 4, map = |s| bytes_null_terminated(s))]
+    #[brw(pad_after = 1, align_after = 2)]
+    #[br(count = len, map = |x: Vec<u8>| String::from_utf8_lossy(&x).into_owned())]
+    #[bw(map = |s| s.as_bytes())]
     pub chars: String,
-}
-
-fn bytes_null_terminated(s: &str) -> Vec<u8> {
-    let mut bytes = s.as_bytes().to_vec();
-    bytes.push(0u8);
-    bytes
 }
 
 // TODO: Fields written in a special order?
@@ -154,10 +148,13 @@ fn bytes_null_terminated(s: &str) -> Vec<u8> {
 #[xc3(magic(b"NX  "))]
 pub struct NxHeader {
     // TODO: Is this an array?
-    pub count: u32,
+    #[br(temp)]
+    count: u32,
+
     #[br(parse_with = FilePtr64::parse)]
-    #[xc3(offset(u64))]
-    pub brti: BrtiOffset,
+    #[br(args { inner: args! { count: count as usize } })]
+    #[xc3(count_offset(u32, u64))]
+    pub brtis: Vec<BrtiOffset>,
 
     #[br(parse_with = FilePtr64::parse)]
     #[xc3(offset(u64))]
@@ -203,10 +200,12 @@ pub struct DictNode {
 #[brw(repr(u32))]
 pub enum SurfaceFormat {
     R8Unorm = 0x0201,
+    Unk1 = 0x0a05,
     R8G8B8A8Unorm = 0x0b01,
     R8G8B8A8Srgb = 0x0b06,
     B8G8R8A8Unorm = 0x0c01,
     B8G8R8A8Srgb = 0x0c06,
+    R11G11B10 = 0x0f05,
     BC1Unorm = 0x1a01,
     BC1Srgb = 0x1a06,
     BC2Unorm = 0x1b01,
@@ -317,55 +316,44 @@ pub struct Mipmaps {
     pub mipmap_offsets: Vec<u64>,
 }
 
-xc3_write_binwrite_impl!(
-    Brtd,
-    ByteOrder,
-    StrSection,
-    TextureDimension,
-    TextureViewDimension,
-    SurfaceFormat,
-    BntxStr,
-    DictSection,
-    Mipmaps,
-    RelocationTable
-);
-
 impl Bntx {
     pub fn width(&self) -> u32 {
-        self.nx_header.brti.brti.width
+        self.nx_header.brtis[0].brti.width
     }
 
     pub fn height(&self) -> u32 {
-        self.nx_header.brti.brti.height
+        self.nx_header.brtis[0].brti.height
     }
 
     pub fn depth(&self) -> u32 {
-        self.nx_header.brti.brti.depth
+        self.nx_header.brtis[0].brti.depth
     }
 
     pub fn layer_count(&self) -> u32 {
-        self.nx_header.brti.brti.layer_count
+        self.nx_header.brtis[0].brti.layer_count
     }
 
     pub fn mipmap_count(&self) -> u32 {
-        self.nx_header.brti.brti.mipmap_count as u32
+        self.nx_header.brtis[0].brti.mipmap_count as u32
     }
 
     pub fn image_format(&self) -> SurfaceFormat {
-        self.nx_header.brti.brti.image_format
+        self.nx_header.brtis[0].brti.image_format
     }
 
     /// The deswizzled image data for all layers and mipmaps.
     pub fn deswizzled_data(&self) -> Result<Vec<u8>, tegra_swizzle::SwizzleError> {
-        let info = &self.nx_header.brti.brti;
+        let info = &self.nx_header.brtis[0].brti;
 
-        deswizzle_surface(
+        let test = tegra_swizzle::block_height_mip0(info.height as usize);
+        dbg!(test);
+        tegra_swizzle::surface::deswizzle_surface(
             info.width as usize,
             info.height as usize,
             info.depth as usize,
             &self.nx_header.brtd.image_data,
             info.image_format.block_dim(),
-            Some(BlockHeight::new(2u32.pow(info.block_height_log2) as usize).unwrap()),
+            Some(test), //Some(BlockHeight::new(2u32.pow(info.block_height_log2) as usize).unwrap()),
             info.image_format.bytes_per_pixel(),
             info.mipmap_count as usize,
             info.layer_count as usize,
@@ -377,11 +365,11 @@ impl Bntx {
         reader.read_le()
     }
 
-    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> Result<(), binrw::error::Error> {
-        write_full(self, writer, 0, &mut 0)
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<()> {
+        xc3_write::write_full(self, writer, 0, &mut 0)
     }
 
-    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), binrw::error::Error> {
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
         let mut writer = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
         self.write(&mut writer)
     }
@@ -393,12 +381,9 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
         writer: &mut W,
         base_offset: u64,
         data_ptr: &mut u64,
-    ) -> BinResult<()> {
+    ) -> std::io::Result<()> {
         // Match the convention for ordering of data items in bntx files.
-        let brti = self
-            .nx_header
-            .brti
-            .write_offset(writer, base_offset, data_ptr)?;
+        let brtis = self.nx_header.brtis.write(writer, base_offset, data_ptr)?;
 
         // TODO: Add an attribute for storing positions of fields and types?
         let str_section_pos = *data_ptr;
@@ -417,18 +402,20 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             .dict
             .write_full(writer, base_offset, data_ptr)?;
 
-        let brti = brti.brti.write_offset(writer, base_offset, data_ptr)?;
-        // Point to the bntx string.
-        brti.name_addr
-            .write_full(writer, base_offset, &mut (str_section_pos + 24))?;
+        for brti in brtis.0 {
+            let brti = brti.brti.write(writer, base_offset, data_ptr)?;
+            // Point to the bntx string.
+            brti.name_addr
+                .write_full(writer, base_offset, &mut (str_section_pos + 24))?;
 
-        // TODO: nx address?
-        brti.parent_addr
-            .write_full(writer, base_offset, &mut (32))?;
+            // TODO: nx address?
+            brti.parent_addr
+                .write_full(writer, base_offset, &mut (32))?;
 
-        brti.unk6.write_full(writer, base_offset, data_ptr)?;
-        brti.unk7.write_full(writer, base_offset, data_ptr)?;
-        brti.mipmaps.write_full(writer, base_offset, data_ptr)?;
+            brti.unk6.write_full(writer, base_offset, data_ptr)?;
+            brti.unk7.write_full(writer, base_offset, data_ptr)?;
+            brti.mipmaps.write_full(writer, base_offset, data_ptr)?;
+        }
 
         // TODO: Is this fixed padding?
         *data_ptr = 4080;
@@ -452,10 +439,12 @@ impl SurfaceFormat {
     fn bytes_per_pixel(&self) -> usize {
         match self {
             SurfaceFormat::R8Unorm => 1,
+            SurfaceFormat::Unk1 => todo!(),
             SurfaceFormat::R8G8B8A8Unorm => 4,
             SurfaceFormat::R8G8B8A8Srgb => 4,
             SurfaceFormat::B8G8R8A8Unorm => 4,
             SurfaceFormat::B8G8R8A8Srgb => 4,
+            SurfaceFormat::R11G11B10 => 4,
             SurfaceFormat::BC1Unorm => 8,
             SurfaceFormat::BC1Srgb => 8,
             SurfaceFormat::BC2Unorm => 16,
@@ -476,10 +465,12 @@ impl SurfaceFormat {
     fn block_dim(&self) -> BlockDim {
         match self {
             SurfaceFormat::R8Unorm => BlockDim::uncompressed(),
+            SurfaceFormat::Unk1 => todo!(),
             SurfaceFormat::R8G8B8A8Unorm => BlockDim::uncompressed(),
             SurfaceFormat::R8G8B8A8Srgb => BlockDim::uncompressed(),
             SurfaceFormat::B8G8R8A8Unorm => BlockDim::uncompressed(),
             SurfaceFormat::B8G8R8A8Srgb => BlockDim::uncompressed(),
+            SurfaceFormat::R11G11B10 => BlockDim::uncompressed(),
             SurfaceFormat::BC1Unorm => BlockDim::block_4x4(),
             SurfaceFormat::BC1Srgb => BlockDim::block_4x4(),
             SurfaceFormat::BC2Unorm => BlockDim::block_4x4(),
@@ -497,6 +488,42 @@ impl SurfaceFormat {
         }
     }
 }
+
+macro_rules! xc3_write_binwrite_impl {
+    ($($ty:ty),*) => {
+        $(
+            impl Xc3Write for $ty {
+                // This also enables write_full since () implements Xc3WriteOffsets.
+                type Offsets<'a> = ();
+
+                fn xc3_write<W: std::io::Write + std::io::Seek>(
+                    &self,
+                    writer: &mut W,
+                ) -> xc3_write::Xc3Result<Self::Offsets<'_>> {
+                    self.write_le(writer).map_err(std::io::Error::other)?;
+                    Ok(())
+                }
+
+                // TODO: Should this be specified manually?
+                const ALIGNMENT: u64 = std::mem::align_of::<$ty>() as u64;
+            }
+        )*
+
+    };
+}
+
+xc3_write_binwrite_impl!(
+    Brtd,
+    ByteOrder,
+    StrSection,
+    TextureDimension,
+    TextureViewDimension,
+    SurfaceFormat,
+    BntxStr,
+    DictSection,
+    Mipmaps,
+    RelocationTable
+);
 
 #[cfg(test)]
 mod tests {
