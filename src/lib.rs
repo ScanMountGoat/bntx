@@ -8,8 +8,7 @@ use tegra_swizzle::surface::BlockDim;
 use xc3_write::{Endian, Xc3Write, Xc3WriteOffsets};
 
 // TODO: Add module level docs for basic usage.
-// TODO: Make this optional.
-pub mod dds;
+pub mod surface;
 
 // TODO: Decompile syroot.nintentools.bntx from switch toolbox to figure out how writing works.
 #[derive(Debug, BinRead, Xc3Write)]
