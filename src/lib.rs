@@ -5,14 +5,12 @@ use std::convert::TryFrom;
 use std::io::{Seek, Write};
 use std::path::Path;
 use tegra_swizzle::surface::BlockDim;
-use xc3_write::{Xc3Write, Xc3WriteOffsets};
+use xc3_write::{Endian, Xc3Write, Xc3WriteOffsets};
 
 // TODO: Add module level docs for basic usage.
 // TODO: Make this optional.
 pub mod dds;
 
-// TODO: add an option to delay calling xc3_write on inner types?
-// TODO: manually implement write offsets to control ordering.
 // TODO: Decompile syroot.nintentools.bntx from switch toolbox to figure out how writing works.
 #[derive(Debug, BinRead, Xc3Write)]
 #[br(magic = b"BNTX")]
@@ -345,18 +343,16 @@ impl Bntx {
     pub fn deswizzled_data(&self) -> Result<Vec<u8>, tegra_swizzle::SwizzleError> {
         let info = &self.nx_header.brtis[0].brti;
 
-        let test = tegra_swizzle::block_height_mip0(info.height as usize);
-        dbg!(test);
         tegra_swizzle::surface::deswizzle_surface(
-            info.width as usize,
-            info.height as usize,
-            info.depth as usize,
+            info.width,
+            info.height,
+            info.depth,
             &self.nx_header.brtd.image_data,
             info.image_format.block_dim(),
-            Some(test), //Some(BlockHeight::new(2u32.pow(info.block_height_log2) as usize).unwrap()),
+            None, // TODO: use block height from header?
             info.image_format.bytes_per_pixel(),
-            info.mipmap_count as usize,
-            info.layer_count as usize,
+            info.mipmap_count as u32,
+            info.layer_count,
         )
     }
     // TODO: from_image_data?
@@ -366,7 +362,7 @@ impl Bntx {
     }
 
     pub fn write<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<()> {
-        xc3_write::write_full(self, writer, 0, &mut 0)
+        xc3_write::write_full(self, writer, 0, &mut 0, Endian::Little)
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
@@ -381,62 +377,67 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
         writer: &mut W,
         base_offset: u64,
         data_ptr: &mut u64,
+        endian: Endian,
     ) -> std::io::Result<()> {
         // Match the convention for ordering of data items in bntx files.
-        let brtis = self.nx_header.brtis.write(writer, base_offset, data_ptr)?;
+        let brtis = self
+            .nx_header
+            .brtis
+            .write(writer, base_offset, data_ptr, endian)?;
 
         // TODO: Add an attribute for storing positions of fields and types?
         let str_section_pos = *data_ptr;
         self.header
             .str_section
-            .write_full(writer, base_offset, data_ptr)?;
+            .write_full(writer, base_offset, data_ptr, endian)?;
 
-        // TODO: Create a unique type for shared offsets that doesn't take &mut?
         // TODO: Store the position of the string section.
         // Point to the string chars.
         self.header
             .file_name
-            .write_full(writer, base_offset, &mut (str_section_pos + 26))?;
+            .set_offset(writer, str_section_pos + 26, endian)?;
 
         self.nx_header
             .dict
-            .write_full(writer, base_offset, data_ptr)?;
+            .write_full(writer, base_offset, data_ptr, endian)?;
 
         for brti in brtis.0 {
-            let brti = brti.brti.write(writer, base_offset, data_ptr)?;
+            let brti = brti.brti.write(writer, base_offset, data_ptr, endian)?;
             // Point to the bntx string.
             brti.name_addr
-                .write_full(writer, base_offset, &mut (str_section_pos + 24))?;
+                .set_offset(writer, str_section_pos + 24, endian)?;
 
             // TODO: nx address?
-            brti.parent_addr
-                .write_full(writer, base_offset, &mut (32))?;
+            brti.parent_addr.set_offset(writer, 32, endian)?;
 
-            brti.unk6.write_full(writer, base_offset, data_ptr)?;
-            brti.unk7.write_full(writer, base_offset, data_ptr)?;
-            brti.mipmaps.write_full(writer, base_offset, data_ptr)?;
+            brti.unk6
+                .write_full(writer, base_offset, data_ptr, endian)?;
+            brti.unk7
+                .write_full(writer, base_offset, data_ptr, endian)?;
+            brti.mipmaps
+                .write_full(writer, base_offset, data_ptr, endian)?;
         }
 
         // TODO: Is this fixed padding?
         *data_ptr = 4080;
         self.nx_header
             .brtd
-            .write_full(writer, base_offset, data_ptr)?;
+            .write_full(writer, base_offset, data_ptr, endian)?;
 
         self.header
             .reloc_table
-            .write_full(writer, base_offset, data_ptr)?;
+            .write_full(writer, base_offset, data_ptr, endian)?;
 
         // This fills in the file size since we write it last.
         self.header
             .file_size
-            .write_full(writer, base_offset, data_ptr)?;
+            .write_full(writer, base_offset, data_ptr, endian)?;
         Ok(())
     }
 }
 
 impl SurfaceFormat {
-    fn bytes_per_pixel(&self) -> usize {
+    fn bytes_per_pixel(&self) -> u32 {
         match self {
             SurfaceFormat::R8Unorm => 1,
             SurfaceFormat::Unk1 => todo!(),
@@ -499,8 +500,13 @@ macro_rules! xc3_write_binwrite_impl {
                 fn xc3_write<W: std::io::Write + std::io::Seek>(
                     &self,
                     writer: &mut W,
+                    endian: xc3_write::Endian,
                 ) -> xc3_write::Xc3Result<Self::Offsets<'_>> {
-                    self.write_le(writer).map_err(std::io::Error::other)?;
+                    let endian = match endian {
+                        xc3_write::Endian::Little => binrw::Endian::Little,
+                        xc3_write::Endian::Big => binrw::Endian::Big,
+                    };
+                    self.write_options(writer, endian, ()).map_err(std::io::Error::other)?;
                     Ok(())
                 }
 
