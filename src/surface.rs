@@ -7,8 +7,8 @@ use tegra_swizzle::{
 use thiserror::Error;
 
 use crate::{
-    Bntx, BntxStr, Brtd, Brti, BrtiOffset, ByteOrder, DictSection, Header, Mipmaps, NxHeader,
-    RelocationEntry, RelocationSection, RelocationTable, StrSection, SurfaceFormat,
+    Bntx, BntxStr, Brtd, Brti, BrtiOffset, ByteOrder, DictNode, DictSection, Header, Mipmaps,
+    NxHeader, RelocationEntry, RelocationSection, RelocationTable, StrSection, SurfaceFormat,
     TextureDimension, TextureViewDimension,
 };
 
@@ -20,8 +20,8 @@ pub enum CreateBntxError {
     #[error("error creating surface")]
     Surface(#[from] image_dds::error::SurfaceError),
 
-    #[error("the given DDS format is not supported")]
-    UnsupportedImageFormat,
+    #[error("unsupported format {0:?}")]
+    UnsupportedImageFormat(image_dds::ImageFormat),
 }
 
 // Filled in during writing by xc3_write.
@@ -94,8 +94,8 @@ impl Bntx {
         )?;
 
         let str_section = StrSection {
-            block_size: 0x58,
-            block_offset: 0x58,
+            block_size: 88,
+            block_offset: 88,
             strings: vec![BntxStr {
                 chars: name.to_string(),
             }],
@@ -121,20 +121,57 @@ impl Bntx {
                 unk: 0,
                 str_section,
                 // TODO: how to initialize this data?
+                // TODO: avoid hard coding offsets.
                 reloc_table: RelocationTable {
-                    sections: vec![RelocationSection {
-                        pointer: todo!(),
-                        position: todo!(),
-                        size: todo!(),
-                        index: todo!(),
-                        count: todo!(),
-                    }],
-                    entries: vec![RelocationEntry {
-                        position: todo!(),
-                        struct_count: todo!(),
-                        offset_count: todo!(),
-                        padding_count: todo!(),
-                    }],
+                    sections: vec![
+                        RelocationSection {
+                            pointer: 0,
+                            position: 0,
+                            size: 1184,
+                            index: 0,
+                            count: 4,
+                        },
+                        // BRTD
+                        RelocationSection {
+                            pointer: 0,
+                            position: 4080,
+                            size: data.len() as u32 + 16,
+                            index: 4,
+                            count: 1,
+                        },
+                    ],
+                    entries: vec![
+                        RelocationEntry {
+                            position: 40,
+                            struct_count: 2,
+                            offset_count: 1,
+                            padding_count: 45,
+                        },
+                        RelocationEntry {
+                            position: 56,
+                            struct_count: 2,
+                            offset_count: 2,
+                            padding_count: 70,
+                        },
+                        RelocationEntry {
+                            position: 480,
+                            struct_count: 2,
+                            offset_count: 1,
+                            padding_count: 1,
+                        },
+                        RelocationEntry {
+                            position: 600,
+                            struct_count: 1,
+                            offset_count: 3,
+                            padding_count: 0,
+                        },
+                        RelocationEntry {
+                            position: 48,
+                            struct_count: 2,
+                            offset_count: 1,
+                            padding_count: 140,
+                        },
+                    ],
                 },
                 file_size: TEMP_OFFSET,
             },
@@ -144,7 +181,11 @@ impl Bntx {
                         size: 3576,
                         size2: 3576,
                         flags: 1,
-                        texture_dimension: TextureDimension::D2,
+                        texture_dimension: if depth > 1 {
+                            TextureDimension::D3
+                        } else {
+                            TextureDimension::D2
+                        },
                         tile_mode: 0,
                         swizzle: 0,
                         mipmap_count: mipmap_count as u16,
@@ -157,10 +198,16 @@ impl Bntx {
                         layer_count,
                         block_height_log2,
                         unk4: [65543, 0, 0, 0, 0, 0],
-                        image_size: data.len() as _,
+                        image_size: data.len() as u32,
                         align: 512,
                         comp_sel: 84148994,
-                        texture_view_dimension: TextureViewDimension::D2,
+                        texture_view_dimension: if depth > 1 {
+                            TextureViewDimension::D3
+                        } else if layer_count == 6 {
+                            TextureViewDimension::Cube
+                        } else {
+                            TextureViewDimension::D2
+                        },
                         name_addr: TEMP_OFFSET as u64,
                         parent_addr: 32,
                         mipmaps: Mipmaps { mipmap_offsets },
@@ -172,10 +219,23 @@ impl Bntx {
                 }],
                 brtd: Brtd { image_data: data },
                 dict: DictSection {
-                    node_count: 0,
-                    nodes: vec![],
+                    node_count: 1,
+                    nodes: vec![
+                        DictNode {
+                            reference: -1,
+                            left_index: 1,
+                            right_index: 0,
+                            name_offset: 436,
+                        },
+                        DictNode {
+                            reference: 0, // TODO: 0 or 1?
+                            left_index: 0,
+                            right_index: 1,
+                            name_offset: 440,
+                        },
+                    ],
                 },
-                dict_size: 0x58,
+                dict_size: 88,
                 unk: [0; 42],
             },
         })

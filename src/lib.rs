@@ -11,7 +11,7 @@ use xc3_write::{Endian, Xc3Write, Xc3WriteOffsets};
 pub mod surface;
 
 // TODO: Decompile syroot.nintentools.bntx from switch toolbox to figure out how writing works.
-#[derive(Debug, BinRead, Xc3Write)]
+#[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
 #[br(magic = b"BNTX")]
 #[xc3(magic(b"BNTX"))]
 pub struct Bntx {
@@ -39,7 +39,7 @@ pub enum ByteOrder {
 }
 
 #[binread]
-#[derive(Debug, Xc3Write, Xc3WriteOffsets)]
+#[derive(Debug, Xc3Write, Xc3WriteOffsets, PartialEq, Clone)]
 pub struct Header {
     pub revision: u16,
 
@@ -65,7 +65,7 @@ pub struct Header {
 
 // TODO: How to recalculate this when saving?
 #[binrw]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 #[brw(magic = b"_RLT")]
 #[bw(stream = w)]
 pub struct RelocationTable {
@@ -87,7 +87,7 @@ pub struct RelocationTable {
     pub entries: Vec<RelocationEntry>,
 }
 
-#[derive(Debug, BinRead, BinWrite)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
 pub struct RelocationSection {
     pub pointer: u64,
     pub position: u32,
@@ -96,7 +96,7 @@ pub struct RelocationSection {
     pub count: u32,
 }
 
-#[derive(Debug, BinRead, BinWrite)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
 pub struct RelocationEntry {
     pub position: u32,
     pub struct_count: u16,
@@ -104,9 +104,8 @@ pub struct RelocationEntry {
     pub padding_count: u8,
 }
 
-// TODO: Find a way to get offsets from strings?
 #[binrw]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 #[brw(magic = b"_STR")]
 pub struct StrSection {
     pub block_size: u32,
@@ -126,7 +125,7 @@ pub struct StrSection {
 
 // TODO: These all refer to the string dict?
 #[binrw]
-#[derive(Debug, Default)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct BntxStr {
     #[br(temp)]
     #[bw(calc = chars.len() as u16)]
@@ -138,13 +137,11 @@ pub struct BntxStr {
     pub chars: String,
 }
 
-// TODO: Fields written in a special order?
 #[binread]
-#[derive(Debug, Xc3Write, Xc3WriteOffsets)]
+#[derive(Debug, Xc3Write, Xc3WriteOffsets, PartialEq, Clone)]
 #[br(magic = b"NX  ")]
 #[xc3(magic(b"NX  "))]
 pub struct NxHeader {
-    // TODO: Is this an array?
     #[br(temp)]
     count: u32,
 
@@ -167,14 +164,14 @@ pub struct NxHeader {
     pub unk: [u64; 42],
 }
 
-#[derive(Debug, BinRead, Xc3Write, Xc3WriteOffsets)]
+#[derive(Debug, BinRead, Xc3Write, Xc3WriteOffsets, PartialEq, Clone)]
 pub struct BrtiOffset {
     #[br(parse_with = FilePtr64::parse)]
     #[xc3(offset(u64))]
     pub brti: Brti,
 }
 
-#[derive(Debug, BinRead, BinWrite)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
 #[brw(magic = b"_DIC")]
 pub struct DictSection {
     pub node_count: u32,
@@ -183,7 +180,7 @@ pub struct DictSection {
     pub nodes: Vec<DictNode>,
 }
 
-#[derive(Debug, BinRead, BinWrite)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
 pub struct DictNode {
     pub reference: i32,
     pub left_index: u16,
@@ -220,7 +217,7 @@ pub enum SurfaceFormat {
     // TODO: Fill in other known formats.
 }
 
-#[derive(Debug, BinRead, Xc3Write, Xc3WriteOffsets)]
+#[derive(Debug, BinRead, Xc3Write, Xc3WriteOffsets, PartialEq, Clone)]
 #[br(magic = b"BRTI")]
 #[xc3(magic(b"BRTI"))]
 pub struct Brti {
@@ -294,7 +291,7 @@ pub enum TextureViewDimension {
 
 #[binrw]
 #[brw(magic = b"BRTD")]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Brtd {
     // Size of the image data + BRTD header.
     #[brw(pad_before = 4)]
@@ -306,7 +303,7 @@ pub struct Brtd {
     pub image_data: Vec<u8>,
 }
 
-#[derive(Debug, BinRead, BinWrite)]
+#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
 #[br(import(mipmap_count: u16))]
 pub struct Mipmaps {
     #[br(count = mipmap_count)]
