@@ -1,3 +1,5 @@
+use std::convert::{TryFrom, TryInto};
+
 use image_dds::{ddsfile::Dds, Surface};
 use tegra_swizzle::{
     block_height_mip0, div_round_up, mip_block_height,
@@ -24,43 +26,64 @@ pub enum CreateBntxError {
     UnsupportedImageFormat(image_dds::ImageFormat),
 }
 
+#[derive(Debug, Error)]
+pub enum CreateDdsError {
+    #[error("failed to swizzle surface")]
+    SwizzleError(#[from] tegra_swizzle::SwizzleError),
+
+    #[error("error creating surface")]
+    Surface(#[from] CreateSurfaceError),
+
+    #[error("error creating DDS")]
+    Dds(#[from] image_dds::CreateDdsError),
+}
+
+#[derive(Debug, Error)]
+pub enum CreateSurfaceError {
+    #[error("failed to swizzle surface")]
+    SwizzleError(#[from] tegra_swizzle::SwizzleError),
+
+    #[error("unsupported format {0:?}")]
+    UnsupportedSurfaceFormat(SurfaceFormat),
+}
+
 // Filled in during writing by xc3_write.
 const TEMP_OFFSET: u32 = 0;
 
 impl Bntx {
-    pub fn to_surface(&self) -> Result<Surface<Vec<u8>>, tegra_swizzle::SwizzleError> {
+    pub fn to_surface(&self) -> Result<Surface<Vec<u8>>, CreateSurfaceError> {
         Ok(Surface {
             width: self.width(),
             height: self.height(),
             depth: self.depth(),
             layers: self.layer_count(),
             mipmaps: self.mipmap_count(),
-            image_format: self.image_format().into(),
+            image_format: self.image_format().try_into()?,
             data: self.deswizzled_data()?,
         })
     }
 
-    pub fn to_dds(&self) -> Result<Dds, tegra_swizzle::SwizzleError> {
-        Ok(image_dds::Surface {
+    pub fn to_dds(&self) -> Result<Dds, CreateDdsError> {
+        image_dds::Surface {
             height: self.height(),
             width: self.width(),
             depth: self.depth(),
             layers: self.layer_count(),
             mipmaps: self.mipmap_count(),
-            image_format: self.image_format().into(),
+            image_format: self.image_format().try_into()?,
             data: self.deswizzled_data()?,
         }
         .to_dds()
-        .unwrap())
+        .map_err(Into::into)
     }
 
     pub fn from_surface<T: AsRef<[u8]>>(
         surface: Surface<T>,
         name: &str,
-    ) -> Result<Self, tegra_swizzle::SwizzleError> {
+    ) -> Result<Self, CreateBntxError> {
         // Let tegra_swizzle calculate the block height.
         // This matches the value inferred for missing block heights like in nutexb.
-        let format = SurfaceFormat::from(surface.image_format);
+        let format = SurfaceFormat::try_from(surface.image_format)?;
         let block_dim = format.block_dim();
         let block_height = block_height_mip0(div_round_up(surface.height, block_dim.height.get()));
 
@@ -284,61 +307,71 @@ fn calculate_mipmap_offsets(
     mipmap_offsets
 }
 
-// TODO: try_from
-impl From<SurfaceFormat> for image_dds::ImageFormat {
-    fn from(value: SurfaceFormat) -> Self {
+impl TryFrom<SurfaceFormat> for image_dds::ImageFormat {
+    type Error = CreateSurfaceError;
+
+    fn try_from(value: SurfaceFormat) -> Result<Self, Self::Error> {
+        // TODO: Add support to image_dds for remaining formats
         match value {
-            SurfaceFormat::R8Unorm => Self::R8Unorm,
-            SurfaceFormat::Unk1 => todo!(),
-            SurfaceFormat::R8G8B8A8Unorm => Self::Rgba8Unorm,
-            SurfaceFormat::R8G8B8A8Srgb => Self::Rgba8UnormSrgb,
-            SurfaceFormat::B8G8R8A8Unorm => Self::Bgra8Unorm,
-            SurfaceFormat::B8G8R8A8Srgb => Self::Bgra8UnormSrgb,
-            SurfaceFormat::R11G11B10 => todo!(), // TODO: Add support to image_dds
-            SurfaceFormat::BC1Unorm => Self::BC1RgbaUnorm,
-            SurfaceFormat::BC1Srgb => Self::BC1RgbaUnormSrgb,
-            SurfaceFormat::BC2Unorm => Self::BC2RgbaUnorm,
-            SurfaceFormat::BC2Srgb => Self::BC2RgbaUnormSrgb,
-            SurfaceFormat::BC3Unorm => Self::BC3RgbaUnorm,
-            SurfaceFormat::BC3Srgb => Self::BC3RgbaUnormSrgb,
-            SurfaceFormat::BC4Unorm => Self::BC4RUnorm,
-            SurfaceFormat::BC4Snorm => Self::BC4RSnorm,
-            SurfaceFormat::BC5Unorm => Self::BC5RgUnorm,
-            SurfaceFormat::BC5Snorm => Self::BC5RgSnorm,
-            SurfaceFormat::BC6Sfloat => Self::BC6hRgbSfloat,
-            SurfaceFormat::BC6Ufloat => Self::BC6hRgbUfloat,
-            SurfaceFormat::BC7Unorm => Self::BC7RgbaUnorm,
-            SurfaceFormat::BC7Srgb => Self::BC7RgbaUnormSrgb,
+            SurfaceFormat::R8Unorm => Ok(Self::R8Unorm),
+            SurfaceFormat::Unk1 => Err(CreateSurfaceError::UnsupportedSurfaceFormat(value)),
+            SurfaceFormat::R8G8B8A8Unorm => Ok(Self::Rgba8Unorm),
+            SurfaceFormat::R8G8B8A8Srgb => Ok(Self::Rgba8UnormSrgb),
+            SurfaceFormat::B8G8R8A8Unorm => Ok(Self::Bgra8Unorm),
+            SurfaceFormat::B8G8R8A8Srgb => Ok(Self::Bgra8UnormSrgb),
+            SurfaceFormat::R11G11B10 => Err(CreateSurfaceError::UnsupportedSurfaceFormat(value)),
+            SurfaceFormat::BC1Unorm => Ok(Self::BC1RgbaUnorm),
+            SurfaceFormat::BC1Srgb => Ok(Self::BC1RgbaUnormSrgb),
+            SurfaceFormat::BC2Unorm => Ok(Self::BC2RgbaUnorm),
+            SurfaceFormat::BC2Srgb => Ok(Self::BC2RgbaUnormSrgb),
+            SurfaceFormat::BC3Unorm => Ok(Self::BC3RgbaUnorm),
+            SurfaceFormat::BC3Srgb => Ok(Self::BC3RgbaUnormSrgb),
+            SurfaceFormat::BC4Unorm => Ok(Self::BC4RUnorm),
+            SurfaceFormat::BC4Snorm => Ok(Self::BC4RSnorm),
+            SurfaceFormat::BC5Unorm => Ok(Self::BC5RgUnorm),
+            SurfaceFormat::BC5Snorm => Ok(Self::BC5RgSnorm),
+            SurfaceFormat::BC6Sfloat => Ok(Self::BC6hRgbSfloat),
+            SurfaceFormat::BC6Ufloat => Ok(Self::BC6hRgbUfloat),
+            SurfaceFormat::BC7Unorm => Ok(Self::BC7RgbaUnorm),
+            SurfaceFormat::BC7Srgb => Ok(Self::BC7RgbaUnormSrgb),
         }
     }
 }
 
-impl From<image_dds::ImageFormat> for SurfaceFormat {
-    fn from(value: image_dds::ImageFormat) -> Self {
+impl TryFrom<image_dds::ImageFormat> for SurfaceFormat {
+    type Error = CreateBntxError;
+
+    fn try_from(value: image_dds::ImageFormat) -> Result<Self, Self::Error> {
         match value {
-            image_dds::ImageFormat::R8Unorm => Self::R8Unorm,
-            image_dds::ImageFormat::Rgba8Unorm => Self::R8G8B8A8Unorm,
-            image_dds::ImageFormat::Rgba8UnormSrgb => Self::R8G8B8A8Srgb,
-            image_dds::ImageFormat::Rgba16Float => todo!(),
-            image_dds::ImageFormat::Rgba32Float => todo!(),
-            image_dds::ImageFormat::Bgra8Unorm => Self::B8G8R8A8Unorm,
-            image_dds::ImageFormat::Bgra8UnormSrgb => Self::B8G8R8A8Srgb,
-            image_dds::ImageFormat::Bgra4Unorm => todo!(),
-            image_dds::ImageFormat::BC1RgbaUnorm => Self::BC1Unorm,
-            image_dds::ImageFormat::BC1RgbaUnormSrgb => Self::BC1Srgb,
-            image_dds::ImageFormat::BC2RgbaUnorm => Self::BC2Unorm,
-            image_dds::ImageFormat::BC2RgbaUnormSrgb => Self::BC2Srgb,
-            image_dds::ImageFormat::BC3RgbaUnorm => Self::BC3Unorm,
-            image_dds::ImageFormat::BC3RgbaUnormSrgb => Self::BC3Srgb,
-            image_dds::ImageFormat::BC4RUnorm => Self::BC4Unorm,
-            image_dds::ImageFormat::BC4RSnorm => Self::BC4Snorm,
-            image_dds::ImageFormat::BC5RgUnorm => Self::BC5Unorm,
-            image_dds::ImageFormat::BC5RgSnorm => Self::BC5Snorm,
-            image_dds::ImageFormat::BC6hRgbUfloat => Self::BC6Ufloat,
-            image_dds::ImageFormat::BC6hRgbSfloat => Self::BC6Sfloat,
-            image_dds::ImageFormat::BC7RgbaUnorm => Self::BC7Unorm,
-            image_dds::ImageFormat::BC7RgbaUnormSrgb => Self::BC7Srgb,
-            _ => todo!(),
+            image_dds::ImageFormat::R8Unorm => Ok(Self::R8Unorm),
+            image_dds::ImageFormat::Rgba8Unorm => Ok(Self::R8G8B8A8Unorm),
+            image_dds::ImageFormat::Rgba8UnormSrgb => Ok(Self::R8G8B8A8Srgb),
+            image_dds::ImageFormat::Rgba16Float => {
+                Err(CreateBntxError::UnsupportedImageFormat(value))
+            }
+            image_dds::ImageFormat::Rgba32Float => {
+                Err(CreateBntxError::UnsupportedImageFormat(value))
+            }
+            image_dds::ImageFormat::Bgra8Unorm => Ok(Self::B8G8R8A8Unorm),
+            image_dds::ImageFormat::Bgra8UnormSrgb => Ok(Self::B8G8R8A8Srgb),
+            image_dds::ImageFormat::Bgra4Unorm => {
+                Err(CreateBntxError::UnsupportedImageFormat(value))
+            }
+            image_dds::ImageFormat::BC1RgbaUnorm => Ok(Self::BC1Unorm),
+            image_dds::ImageFormat::BC1RgbaUnormSrgb => Ok(Self::BC1Srgb),
+            image_dds::ImageFormat::BC2RgbaUnorm => Ok(Self::BC2Unorm),
+            image_dds::ImageFormat::BC2RgbaUnormSrgb => Ok(Self::BC2Srgb),
+            image_dds::ImageFormat::BC3RgbaUnorm => Ok(Self::BC3Unorm),
+            image_dds::ImageFormat::BC3RgbaUnormSrgb => Ok(Self::BC3Srgb),
+            image_dds::ImageFormat::BC4RUnorm => Ok(Self::BC4Unorm),
+            image_dds::ImageFormat::BC4RSnorm => Ok(Self::BC4Snorm),
+            image_dds::ImageFormat::BC5RgUnorm => Ok(Self::BC5Unorm),
+            image_dds::ImageFormat::BC5RgSnorm => Ok(Self::BC5Snorm),
+            image_dds::ImageFormat::BC6hRgbUfloat => Ok(Self::BC6Ufloat),
+            image_dds::ImageFormat::BC6hRgbSfloat => Ok(Self::BC6Sfloat),
+            image_dds::ImageFormat::BC7RgbaUnorm => Ok(Self::BC7Unorm),
+            image_dds::ImageFormat::BC7RgbaUnormSrgb => Ok(Self::BC7Srgb),
+            _ => Err(CreateBntxError::UnsupportedImageFormat(value)),
         }
     }
 }
