@@ -9,4 +9,4 @@ binrw = "0.14.1"
 tegra_swizzle = "0.4.0"
 thiserror = "1.0"
 xc3_write = "0.15.0"
-image_dds = { version = "0.6.2", default-features = false, features = ["ddsfile"] }
+image_dds = { version = "0.7.0", default-features = false, features = ["ddsfile"] }
