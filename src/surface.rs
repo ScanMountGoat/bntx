@@ -160,7 +160,7 @@ impl Bntx {
                             index: 0,
                             count: 4,
                         },
-                        // BRTD to _RLTD
+                        // BRTD to _RLT
                         RelocationSection {
                             pointer: 0,
                             position: TEMP_OFFSET,
@@ -169,34 +169,35 @@ impl Bntx {
                             count: 1,
                         },
                     ],
-                    // TODO: How to fill in these entries?
                     entries: vec![
+                        // Section 0
                         RelocationEntry {
-                            position: 40,
+                            position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 1,
                             padding_count: 45,
                         },
                         RelocationEntry {
-                            position: 56,
+                            position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 2,
                             padding_count: 70,
                         },
                         RelocationEntry {
-                            position: 480,
+                            position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 1,
                             padding_count: 1,
                         },
                         RelocationEntry {
-                            position: 600,
+                            position: TEMP_OFFSET,
                             struct_count: 1,
                             offset_count: 3,
                             padding_count: 0,
                         },
+                        // Section 1
                         RelocationEntry {
-                            position: 48,
+                            position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 1,
                             padding_count: 140,

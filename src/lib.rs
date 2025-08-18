@@ -95,6 +95,7 @@ pub struct RelocationSection {
 
 #[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
 pub struct RelocationEntry {
+    #[xc3(shared_offset)]
     pub position: u32,
     pub struct_count: u16,
     pub offset_count: u8,
@@ -374,7 +375,7 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
         base_offset: u64,
         data_ptr: &mut u64,
         endian: Endian,
-        args: Self::Args,
+        _args: Self::Args,
     ) -> std::io::Result<()> {
         // Match the convention for ordering of data items in bntx files.
         let brtis = self
@@ -394,6 +395,7 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             .file_name
             .set_offset(writer, str_section_pos + 26, endian)?;
 
+        let dict_pos = data_ptr.next_multiple_of(8);
         self.nx_header
             .dict
             .write_full(writer, base_offset, data_ptr, endian, ())?;
@@ -406,6 +408,7 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             .block_size
             .set_offset(writer, *data_ptr - str_section_pos, endian)?;
 
+        let brtis_pos = *data_ptr;
         for brti in brtis.0 {
             let brti_position = *data_ptr;
             let brti = brti.brti.write(writer, base_offset, data_ptr, endian)?;
@@ -451,7 +454,7 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             .size
             .set_offset(writer, after_brti_pos, endian)?;
 
-        // BRTD to _RLTD
+        // BRTD to _RLT
         reloc_table.sections.0[1]
             .position
             .set_offset(writer, 4080, endian)?;
@@ -460,6 +463,29 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             self.nx_header.brtd.data.image_data.len() as u64 + 16,
             endian,
         )?;
+
+        // TODO: How to set the padding?
+        // _RLT Section 0
+        reloc_table.entries.0[0]
+            .position
+            .set_offset(writer, 40, endian)?;
+        reloc_table.entries.0[1]
+            .position
+            .set_offset(writer, 56, endian)?;
+        // _DIC str offsets
+        reloc_table.entries.0[2]
+            .position
+            .set_offset(writer, dict_pos + 16, endian)?;
+        // _BRTI str offset
+        reloc_table.entries.0[3]
+            .position
+            .set_offset(writer, brtis_pos + 96, endian)?;
+
+        // _RLT Section 1
+        // BRTD offset
+        reloc_table.entries.0[4]
+            .position
+            .set_offset(writer, 48, endian)?;
 
         // This fills in the file size since we write it last.
         self.header
