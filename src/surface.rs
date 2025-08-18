@@ -117,8 +117,10 @@ impl Bntx {
         )?;
 
         let str_section = StrSection {
-            block_size: 88,
-            block_offset: 88,
+            block_size: TEMP_OFFSET,
+            block_offset: TEMP_OFFSET as u64,
+            str_count: 1,
+            empty: BntxStr::default(),
             strings: vec![BntxStr {
                 chars: name.to_string(),
             }],
@@ -146,23 +148,28 @@ impl Bntx {
                 // TODO: how to initialize this data?
                 // TODO: avoid hard coding offsets.
                 reloc_table: RelocationTable {
+                    position: TEMP_OFFSET,
+                    count: 2,
+                    unk1: 0,
                     sections: vec![
+                        // Data until end of BRTIs
                         RelocationSection {
                             pointer: 0,
-                            position: 0,
-                            size: 1184,
+                            position: TEMP_OFFSET,
+                            size: TEMP_OFFSET,
                             index: 0,
                             count: 4,
                         },
-                        // BRTD
+                        // BRTD to _RLTD
                         RelocationSection {
                             pointer: 0,
-                            position: 4080,
-                            size: data.len() as u32 + 16,
+                            position: TEMP_OFFSET,
+                            size: TEMP_OFFSET,
                             index: 4,
                             count: 1,
                         },
                     ],
+                    // TODO: How to fill in these entries?
                     entries: vec![
                         RelocationEntry {
                             position: 40,
@@ -266,7 +273,7 @@ impl Bntx {
 
     pub fn from_dds(dds: &Dds, name: &str) -> Result<Self, CreateBntxError> {
         let surface = image_dds::Surface::from_dds(dds)?;
-        Self::from_surface(surface, name).map_err(Into::into)
+        Self::from_surface(surface, name)
     }
 }
 

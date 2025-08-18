@@ -5,7 +5,7 @@ use std::convert::TryFrom;
 use std::io::{Seek, Write};
 use std::path::Path;
 use tegra_swizzle::surface::BlockDim;
-use xc3_write::{Endian, Xc3Write, Xc3WriteOffsets};
+use xc3_write::{Endian, WriteFull, Xc3Write, Xc3WriteOffsets};
 
 // TODO: Add module level docs for basic usage.
 pub mod surface;
@@ -39,7 +39,7 @@ pub enum ByteOrder {
 }
 
 #[binread]
-#[derive(Debug, Xc3Write, Xc3WriteOffsets, PartialEq, Clone)]
+#[derive(Debug, Xc3Write, PartialEq, Clone)]
 pub struct Header {
     pub revision: u16,
 
@@ -64,22 +64,17 @@ pub struct Header {
 }
 
 // TODO: How to recalculate this when saving?
-#[binrw]
-#[derive(Debug, PartialEq, Clone)]
-#[brw(magic = b"_RLT")]
-#[bw(stream = w)]
+#[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
+#[br(magic(b"_RLT"))]
+#[xc3(magic(b"_RLT"))]
 pub struct RelocationTable {
-    #[br(temp)]
-    #[bw(calc = w.stream_position().unwrap() as u32 - 4)]
-    pub rlt_section_pos: u32,
-
-    #[br(temp)]
-    #[bw(calc = sections.len() as u32)]
+    #[xc3(shared_offset)]
+    pub position: u32,
     pub count: u32,
+    pub unk1: u32, // 0
 
     // TODO: main header section and brtd?
-    #[br(pad_before = 4, count = count)]
-    #[bw(pad_before = 4)]
+    #[br(count = count)]
     pub sections: Vec<RelocationSection>,
 
     // TODO: Pointers to string pointers?
@@ -87,16 +82,18 @@ pub struct RelocationTable {
     pub entries: Vec<RelocationEntry>,
 }
 
-#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
+#[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
 pub struct RelocationSection {
     pub pointer: u64,
+    #[xc3(shared_offset)]
     pub position: u32,
+    #[xc3(shared_offset)]
     pub size: u32,
     pub index: u32,
     pub count: u32,
 }
 
-#[derive(Debug, BinRead, BinWrite, PartialEq, Clone)]
+#[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
 pub struct RelocationEntry {
     pub position: u32,
     pub struct_count: u16,
@@ -104,22 +101,21 @@ pub struct RelocationEntry {
     pub padding_count: u8,
 }
 
-#[binrw]
-#[derive(Debug, PartialEq, Clone)]
-#[brw(magic = b"_STR")]
+#[derive(Debug, BinRead, Xc3Write, PartialEq, Clone)]
+#[br(magic(b"_STR"))]
+#[xc3(magic(b"_STR"))]
 pub struct StrSection {
+    #[xc3(shared_offset)]
     pub block_size: u32,
+    #[xc3(shared_offset)]
     pub block_offset: u64,
 
-    #[bw(calc = strings.len() as u32)]
     pub str_count: u32,
 
-    // #[br(temp)]
-    #[bw(calc = BntxStr::default())]
     pub empty: BntxStr,
 
     #[br(count = str_count)]
-    #[bw(align_after = 8)]
+    #[xc3(align_after = 8)]
     pub strings: Vec<BntxStr>,
 }
 
@@ -221,7 +217,9 @@ pub enum SurfaceFormat {
 #[br(magic = b"BRTI")]
 #[xc3(magic(b"BRTI"))]
 pub struct Brti {
-    pub size: u32,  // offset?
+    #[xc3(shared_offset)]
+    pub size: u32, // offset?
+    #[xc3(shared_offset)]
     pub size2: u64, // size?
     pub flags: u8,
     pub texture_dimension: TextureDimension,
@@ -358,7 +356,7 @@ impl Bntx {
     }
 
     pub fn write<W: Write + Seek>(&self, writer: &mut W) -> std::io::Result<()> {
-        xc3_write::write_full(self, writer, 0, &mut 0, Endian::Little)
+        self.write_full(writer, 0, &mut 0, Endian::Little, ())
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
@@ -368,12 +366,15 @@ impl Bntx {
 }
 
 impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
+    type Args = ();
+
     fn write_offsets<W: Write + Seek>(
         &self,
         writer: &mut W,
         base_offset: u64,
         data_ptr: &mut u64,
         endian: Endian,
+        args: Self::Args,
     ) -> std::io::Result<()> {
         // Match the convention for ordering of data items in bntx files.
         let brtis = self
@@ -383,11 +384,11 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
 
         // TODO: Add an attribute for storing positions of fields and types?
         let str_section_pos = *data_ptr;
-        self.header
+        let str_section = self
+            .header
             .str_section
-            .write_full(writer, base_offset, data_ptr, endian)?;
+            .write(writer, base_offset, data_ptr, endian)?;
 
-        // TODO: Store the position of the string section.
         // Point to the string chars.
         self.header
             .file_name
@@ -395,10 +396,25 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
 
         self.nx_header
             .dict
-            .write_full(writer, base_offset, data_ptr, endian)?;
+            .write_full(writer, base_offset, data_ptr, endian, ())?;
+
+        // TODO: why does the str section point past the dict section?
+        str_section
+            .block_offset
+            .set_offset(writer, *data_ptr - str_section_pos, endian)?;
+        str_section
+            .block_size
+            .set_offset(writer, *data_ptr - str_section_pos, endian)?;
 
         for brti in brtis.0 {
+            let brti_position = *data_ptr;
             let brti = brti.brti.write(writer, base_offset, data_ptr, endian)?;
+
+            // TODO: How to set this if there is more than 1 BRTI?
+            brti.size.set_offset(writer, 4080 - brti_position, endian)?;
+            brti.size2
+                .set_offset(writer, 4080 - brti_position, endian)?;
+
             // Point to the bntx string.
             brti.name_addr
                 .set_offset(writer, str_section_pos + 24, endian)?;
@@ -407,27 +423,48 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             brti.parent_addr.set_offset(writer, 32, endian)?;
 
             brti.unk6
-                .write_full(writer, base_offset, data_ptr, endian)?;
+                .write_full(writer, base_offset, data_ptr, endian, ())?;
             brti.unk7
-                .write_full(writer, base_offset, data_ptr, endian)?;
+                .write_full(writer, base_offset, data_ptr, endian, ())?;
             brti.mipmaps
-                .write_full(writer, base_offset, data_ptr, endian)?;
+                .write_full(writer, base_offset, data_ptr, endian, ())?;
         }
+        let after_brti_pos = *data_ptr;
 
         // TODO: Is this fixed padding?
         *data_ptr = 4080;
         self.nx_header
             .brtd
-            .write_full(writer, base_offset, data_ptr, endian)?;
+            .write_full(writer, base_offset, data_ptr, endian, ())?;
 
-        self.header
+        let reloc_table_pos = *data_ptr;
+        let reloc_table = self
+            .header
             .reloc_table
-            .write_full(writer, base_offset, data_ptr, endian)?;
+            .write(writer, base_offset, data_ptr, endian)?;
+        reloc_table
+            .position
+            .set_offset(writer, reloc_table_pos, endian)?;
+
+        // Data until end of BRTIs
+        reloc_table.sections.0[0]
+            .size
+            .set_offset(writer, after_brti_pos, endian)?;
+
+        // BRTD to _RLTD
+        reloc_table.sections.0[1]
+            .position
+            .set_offset(writer, 4080, endian)?;
+        reloc_table.sections.0[1].size.set_offset(
+            writer,
+            self.nx_header.brtd.data.image_data.len() as u64 + 16,
+            endian,
+        )?;
 
         // This fills in the file size since we write it last.
         self.header
             .file_size
-            .write_full(writer, base_offset, data_ptr, endian)?;
+            .write_full(writer, base_offset, data_ptr, endian, ())?;
         Ok(())
     }
 }
@@ -517,14 +554,12 @@ macro_rules! xc3_write_binwrite_impl {
 xc3_write_binwrite_impl!(
     Brtd,
     ByteOrder,
-    StrSection,
     TextureDimension,
     TextureViewDimension,
     SurfaceFormat,
     BntxStr,
     DictSection,
-    Mipmaps,
-    RelocationTable
+    Mipmaps
 );
 
 #[cfg(test)]

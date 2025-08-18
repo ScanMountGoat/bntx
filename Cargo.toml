@@ -5,8 +5,8 @@ authors = ["jam1garner <8260240+jam1garner@users.noreply.github.com>", "ScanMoun
 edition = "2018"
 
 [dependencies]
-binrw = "0.14.1"
+binrw = "0.15.0"
 tegra_swizzle = "0.4.0"
-thiserror = "1.0"
-xc3_write = "0.15.0"
+thiserror = "2.0"
+xc3_write = "0.20.0"
 image_dds = { version = "0.7.0", default-features = false, features = ["ddsfile"] }
