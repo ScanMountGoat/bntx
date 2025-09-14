@@ -89,7 +89,7 @@ pub struct RelocationSection {
     pub position: u32,
     #[xc3(shared_offset)]
     pub size: u32,
-    pub index: u32,
+    pub entry_start_index: u32,
     pub count: u32,
 }
 
@@ -99,6 +99,7 @@ pub struct RelocationEntry {
     pub position: u32,
     pub struct_count: u16,
     pub offset_count: u8,
+    #[xc3(shared_offset)]
     pub padding_count: u8,
 }
 
@@ -464,18 +465,33 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
             endian,
         )?;
 
-        // TODO: How to set the padding?
+        // TODO: Set positions automatically without assuming entry order and count?
+        // TODO: There's some sort of relationship where padding count and position increase together.
+        let padding = brtis_pos / 8 + 7;
+
         // _RLT Section 0
         reloc_table.entries.0[0]
             .position
             .set_offset(writer, 40, endian)?;
+        reloc_table.entries.0[0]
+            .padding_count
+            .set_offset(writer, 45, endian)?;
+
         reloc_table.entries.0[1]
             .position
             .set_offset(writer, 56, endian)?;
+        reloc_table.entries.0[1]
+            .padding_count
+            .set_offset(writer, padding, endian)?;
+
         // _DIC str offsets
         reloc_table.entries.0[2]
             .position
             .set_offset(writer, dict_pos + 16, endian)?;
+        reloc_table.entries.0[2]
+            .padding_count
+            .set_offset(writer, 1, endian)?;
+
         // _BRTI str offset
         reloc_table.entries.0[3]
             .position
@@ -486,6 +502,9 @@ impl<'a> Xc3WriteOffsets for BntxOffsets<'a> {
         reloc_table.entries.0[4]
             .position
             .set_offset(writer, 48, endian)?;
+        reloc_table.entries.0[4]
+            .padding_count
+            .set_offset(writer, padding + 70, endian)?;
 
         // This fills in the file size since we write it last.
         self.header

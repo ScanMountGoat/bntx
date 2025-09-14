@@ -86,18 +86,8 @@ impl Bntx {
         let format = SurfaceFormat::try_from(surface.image_format)?;
         let block_dim = format.block_dim();
         let block_height = block_height_mip0(div_round_up(surface.height, block_dim.height.get()));
-
-        let block_height_log2 = match block_height {
-            BlockHeight::One => 0,
-            BlockHeight::Two => 1,
-            BlockHeight::Four => 2,
-            BlockHeight::Eight => 3,
-            BlockHeight::Sixteen => 4,
-            BlockHeight::ThirtyTwo => 5,
-        };
-
+        let block_height_log2 = (block_height as u32).ilog2();
         let bytes_per_pixel = format.bytes_per_pixel();
-
         let width = surface.width;
         let height = surface.height;
         let depth = surface.depth;
@@ -146,7 +136,7 @@ impl Bntx {
                 unk: 0,
                 str_section,
                 // TODO: how to initialize this data?
-                // TODO: avoid hard coding offsets.
+                // TODO: switch toolbox generates more entries to avoid setting padding count?
                 reloc_table: RelocationTable {
                     position: TEMP_OFFSET,
                     count: 2,
@@ -157,7 +147,7 @@ impl Bntx {
                             pointer: 0,
                             position: TEMP_OFFSET,
                             size: TEMP_OFFSET,
-                            index: 0,
+                            entry_start_index: 0,
                             count: 4,
                         },
                         // BRTD to _RLT
@@ -165,7 +155,7 @@ impl Bntx {
                             pointer: 0,
                             position: TEMP_OFFSET,
                             size: TEMP_OFFSET,
-                            index: 4,
+                            entry_start_index: 4,
                             count: 1,
                         },
                     ],
@@ -181,7 +171,7 @@ impl Bntx {
                             position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 2,
-                            padding_count: 70,
+                            padding_count: 0,
                         },
                         RelocationEntry {
                             position: TEMP_OFFSET,
@@ -200,7 +190,7 @@ impl Bntx {
                             position: TEMP_OFFSET,
                             struct_count: 2,
                             offset_count: 1,
-                            padding_count: 140,
+                            padding_count: 0,
                         },
                     ],
                 },
@@ -209,8 +199,8 @@ impl Bntx {
             nx_header: NxHeader {
                 brtis: vec![BrtiOffset {
                     brti: Brti {
-                        size: 3576,
-                        size2: 3576,
+                        size: TEMP_OFFSET,
+                        size2: TEMP_OFFSET as u64,
                         flags: 1,
                         texture_dimension: if depth > 1 {
                             TextureDimension::D3
